@@ -1,4 +1,4 @@
-# signalk-ntfy-relay
+# @sailingnaturali/signalk-ntfy-relay
 
 Relay [Signal K](https://signalk.org) notifications (alarms) to an
 [ntfy](https://ntfy.sh) topic — so a man-overboard, depth/wind/battery alarm, or
