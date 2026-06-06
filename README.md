@@ -1,0 +1,56 @@
+# signalk-ntfy-relay
+
+Relay [Signal K](https://signalk.org) notifications (alarms) to an
+[ntfy](https://ntfy.sh) topic — so a man-overboard, depth/wind/battery alarm, or
+any other notification reaches your phone, independent of any chartplotter or
+shoreside server.
+
+**Zero runtime dependencies.** Notifications are read in-process via the Signal K
+subscription manager; ntfy is reached with Node's built-in `https`.
+
+## How it works
+
+- Subscribes to `notifications.*` and **edge-triggers**: it pushes once when an
+  alarm becomes active, not repeatedly while it persists.
+- Forwards notifications at or above a configurable severity (`warn` by default).
+- Maps Signal K severity to ntfy **priority** and **tags**:
+
+  | Signal K state | ntfy priority | tag |
+  |----------------|---------------|-----|
+  | `emergency` | 5 (max) | 🆘 `sos` |
+  | `alarm` | 4 (high) | 🚨 `rotating_light` |
+  | `warn` | 3 (default) | ⚠️ `warning` |
+  | `alert` | 2 (low) | ℹ️ `information_source` |
+  | cleared (`normal`) | 1 (min) | ✅ `white_check_mark` |
+
+- Appends the vessel position to the message when known.
+
+## Configuration
+
+| Setting | Default | Notes |
+|---------|---------|-------|
+| `server` | `https://ntfy.sh` | Set to your self-hosted ntfy server |
+| `topic` | *(required)* | The ntfy topic to publish to |
+| `token` | *(empty)* | `Authorization: Bearer` token (self-hosted/ACL) |
+| `minState` | `warn` | Minimum severity to forward |
+| `notifyOnClear` | `true` | Also send a message when an alarm resolves |
+| `includePosition` | `true` | Append `lat, lon` to the message |
+
+## Setup
+
+1. Install from the Signal K app store (category: Notifications), or drop this
+   folder into the server's `node_modules`.
+2. Pick a hard-to-guess topic (anyone who knows a public-server topic can read it),
+   e.g. `naturali-alarms-7f3a`.
+3. Install the ntfy app on your phone and subscribe to that topic.
+4. Configure the plugin with the topic and enable it.
+
+Test it by raising a notification, e.g. a man-overboard via the Signal K v2 API:
+
+```bash
+curl -X POST http://localhost:3000/signalk/v2/api/notifications/mob
+```
+
+## License
+
+MIT

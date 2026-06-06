@@ -1,0 +1,33 @@
+{
+  "name": "signalk-ntfy-relay",
+  "version": "0.1.0",
+  "description": "Relay SignalK notifications (alarms) to an ntfy topic — zero dependencies, edge-triggered, severity-aware.",
+  "main": "index.js",
+  "scripts": {
+    "test": "node --test"
+  },
+  "keywords": [
+    "signalk-node-server-plugin",
+    "signalk-category-notifications",
+    "ntfy",
+    "notifications",
+    "alarm",
+    "marine"
+  ],
+  "author": "Bryan Clark",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sailingnaturali/signalk-ntfy-relay.git"
+  },
+  "homepage": "https://github.com/sailingnaturali/signalk-ntfy-relay#readme",
+  "bugs": {
+    "url": "https://github.com/sailingnaturali/signalk-ntfy-relay/issues"
+  },
+  "files": [
+    "index.js"
+  ],
+  "engines": {
+    "node": ">=18"
+  }
+}
