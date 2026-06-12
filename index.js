@@ -37,6 +37,19 @@ function tagsFor(state) {
   return isActive(state) ? (TAGS[state] || 'warning') : 'white_check_mark';
 }
 
+// HTTP header values must be a single line. The notification path and state
+// are in-process data, but another plugin (or replayed/injected delta) could
+// put a CR/LF in a path; left raw it would either smuggle extra response
+// headers into the ntfy request or trip Node's ERR_INVALID_CHAR and silently
+// drop the alarm push. Collapse control runs to a space and cap the length so
+// a pathological path can't bloat the request line.
+function headerSafe(value, max = 256) {
+  return String(value)
+    .replace(/[\x00-\x1f\x7f]+/g, ' ')
+    .trim()
+    .slice(0, max);
+}
+
 // Compose the ntfy HTTP request (pure — no I/O). Returns {url, headers, body}.
 function buildRequest(n, position, options) {
   const base = (options.server || 'https://ntfy.sh').replace(/\/+$/, '');
@@ -45,7 +58,7 @@ function buildRequest(n, position, options) {
   const url = `${base}/${encodeURIComponent(options.topic)}`;
   const headers = {
     'Content-Type': 'text/plain; charset=utf-8',
-    Title: `${String(n.state).toUpperCase()}: ${n.path}`,
+    Title: headerSafe(`${String(n.state).toUpperCase()}: ${n.path}`),
     Priority: priorityFor(n.state),
     Tags: tagsFor(n.state),
   };
@@ -201,4 +214,4 @@ module.exports = function (app, deps) {
 };
 
 // Pure helpers, hung off the factory for unit tests.
-module.exports._internal = { rank, isActive, shouldForward, priorityFor, tagsFor, buildRequest };
+module.exports._internal = { rank, isActive, shouldForward, priorityFor, tagsFor, buildRequest, headerSafe };

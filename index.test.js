@@ -45,7 +45,24 @@ test('tagsFor maps severity to an emoji shortcode', () => {
   assert.equal(tagsFor('normal'), 'white_check_mark'); // cleared
 });
 
-const { buildRequest } = createPlugin._internal;
+const { buildRequest, headerSafe } = createPlugin._internal;
+
+test('headerSafe collapses CR/LF and control chars to a single space', () => {
+  assert.equal(headerSafe('EMERGENCY: a\r\nX-Evil: 1'), 'EMERGENCY: a X-Evil: 1');
+  assert.equal(headerSafe('a\tb'), 'a b');
+});
+
+test('headerSafe caps header length', () => {
+  assert.equal(headerSafe('x'.repeat(500)).length, 256);
+});
+
+test('buildRequest neutralizes a CRLF-bearing notification path in the Title header', () => {
+  const r = buildRequest({ path: 'mob\r\nX-Evil: pwned', state: 'emergency' }, undefined, {
+    topic: 't',
+  });
+  assert.doesNotMatch(r.headers.Title, /[\r\n]/);
+  assert.equal(r.headers.Title, 'EMERGENCY: mob X-Evil: pwned');
+});
 
 const N = { path: 'mob.1', state: 'emergency', message: 'Man overboard' };
 const POS = { latitude: 48.7621, longitude: -123.052 };
