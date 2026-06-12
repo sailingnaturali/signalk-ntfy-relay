@@ -48,7 +48,7 @@ subscription manager; ntfy is reached with Node's built-in `https`.
 Test it by raising a notification, e.g. a man-overboard via the Signal K v2 API:
 
 ```bash
-curl -X POST http://localhost:3000/signalk/v2/api/notifications/mob
+curl -X POST http://<signalk-host>:3000/signalk/v2/api/notifications/mob
 ```
 
 ## License
