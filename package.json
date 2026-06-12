@@ -1,6 +1,6 @@
 {
   "name": "@sailingnaturali/signalk-ntfy-relay",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Relay SignalK notifications (alarms) to an ntfy topic — zero dependencies, edge-triggered, severity-aware.",
   "main": "index.js",
   "scripts": {
@@ -24,8 +24,15 @@
   "bugs": {
     "url": "https://github.com/sailingnaturali/signalk-ntfy-relay/issues"
   },
+  "signalk": {
+    "displayName": "ntfy notification relay",
+    "screenshots": [
+      "./docs/screenshots/config.png"
+    ]
+  },
   "files": [
-    "index.js"
+    "index.js",
+    "docs/screenshots/"
   ],
   "publishConfig": {
     "access": "public"
