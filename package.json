@@ -1,6 +1,6 @@
 {
   "name": "@sailingnaturali/signalk-ntfy-relay",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Relay SignalK notifications (alarms) to an ntfy topic — zero dependencies, edge-triggered, severity-aware.",
   "main": "index.js",
   "scripts": {
