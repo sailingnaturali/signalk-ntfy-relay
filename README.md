@@ -51,6 +51,26 @@ Test it by raising a notification, e.g. a man-overboard via the Signal K v2 API:
 curl -X POST http://<signalk-host>:3000/signalk/v2/api/notifications/mob
 ```
 
+## Diagnostics
+
+`scripts/ntfy-doctor.js` checks the ntfy delivery leg directly, so a silent break
+(expired access token, reserved-topic ACL) surfaces without waiting for a real
+alarm — the failure mode that can take the whole alarm-to-phone path dark unnoticed.
+
+```bash
+# verify the access token (read-only; publishes nothing)
+npm run ntfy-doctor -- --config /home/node/.signalk/plugin-config-data/signalk-ntfy-relay.json
+
+# end-to-end: publish a labelled test message and confirm it landed
+NTFY_TOPIC=my-alarms NTFY_TOKEN=tk_xxx npm run ntfy-doctor -- test
+
+# list the topic's messages from the last 10 minutes
+npm run ntfy-doctor -- poll --server https://ntfy.sh --topic my-alarms
+```
+
+Config resolves in the order: CLI flag → `--config <plugin-config.json>` → env
+(`NTFY_SERVER`/`NTFY_TOPIC`/`NTFY_TOKEN`) → default. The token is never printed.
+
 ## License
 
 MIT

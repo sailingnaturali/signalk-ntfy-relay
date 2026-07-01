@@ -4,7 +4,8 @@
   "description": "Relay SignalK notifications (alarms) to an ntfy topic — zero dependencies, edge-triggered, severity-aware.",
   "main": "index.js",
   "scripts": {
-    "test": "node --test"
+    "test": "node --test",
+    "ntfy-doctor": "node scripts/ntfy-doctor.js"
   },
   "keywords": [
     "signalk-node-server-plugin",
