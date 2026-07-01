@@ -86,6 +86,9 @@ NTFY_TOPIC=my-alarms NTFY_TOKEN=tk_xxx npm run ntfy-doctor -- test
 
 # list the topic's messages from the last 10 minutes
 npm run ntfy-doctor -- poll --server https://ntfy.sh --topic my-alarms
+
+# mint a fresh (non-expiring) token and rotate it into the config in place
+npm run ntfy-doctor -- mint --config /home/node/.signalk/plugin-config-data/signalk-ntfy-relay.json
 ```
 
 Config resolves in the order: CLI flag → `--config <plugin-config.json>` → env

@@ -18,6 +18,11 @@
  *   test              Publish a labelled test message to the topic, then poll to
  *                     confirm it landed (a real end-to-end delivery check).
  *   poll              List messages published to the topic in the last 10 minutes.
+ *   mint              Create a new access token via POST /v1/account/token
+ *                     (authenticates with the existing token). With --config it
+ *                     rotates the token into that config file (backup written);
+ *                     otherwise it prints the new token. Tune with --label and
+ *                     --expires (never | <days>, default never).
  *
  * Config (precedence: CLI flag > --config file > env > default):
  *   --server <url>    ntfy base URL           (env NTFY_SERVER, default https://ntfy.sh)
@@ -134,6 +139,62 @@ async function test({ server, topic, token }) {
   return landed ? 0 : 1;
 }
 
+async function mint({ server, token }, args) {
+  if (!token) {
+    console.error('error: mint needs an existing token to authenticate (--token, NTFY_TOKEN, or --config)');
+    return 2;
+  }
+  const label = args.label || 'signalk-ntfy-relay';
+  const expiresArg = args.expires || 'never';
+  let expires = 0; // 0 = never
+  if (expiresArg !== 'never') {
+    const days = Number(expiresArg);
+    if (!Number.isFinite(days) || days <= 0) {
+      console.error('error: --expires must be "never" or a positive number of days');
+      return 2;
+    }
+    expires = Math.floor(Date.now() / 1000) + Math.round(days * 86400);
+  }
+
+  const body = JSON.stringify({ label, expires });
+  const res = await request(`${server}/v1/account/token`, {
+    method: 'POST',
+    headers: { ...authHeaders(token), 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+    body,
+  });
+  if (res.status !== 200) {
+    console.log(`mint: ${res.status}`);
+    console.log(res.status === 401
+      ? '✗ existing token cannot create tokens (invalid or insufficient scope)'
+      : '✗ mint failed');
+    return 1;
+  }
+  let tok, exp;
+  try { const j = JSON.parse(res.body); tok = j.token; exp = j.expires; } catch (e) {}
+  if (!tok) { console.log('✗ no token in response'); return 1; }
+
+  // Verify the new token works before we rely on it.
+  const ver = await request(`${server}/v1/account`, { headers: authHeaders(tok) });
+  if (ver.status !== 200) { console.log(`✗ new token failed verification (${ver.status})`); return 1; }
+  const expiryLabel = exp == null || exp === 0 ? 'never' : new Date(exp * 1000).toISOString();
+
+  if (args.config) {
+    const conf = JSON.parse(fs.readFileSync(args.config, 'utf8'));
+    conf.configuration = conf.configuration || {};
+    const bak = `${args.config}.bak-${Date.now()}`;
+    fs.writeFileSync(bak, JSON.stringify(conf, null, 2));
+    conf.configuration.token = tok;
+    fs.writeFileSync(args.config, JSON.stringify(conf, null, 2));
+    console.log(`✓ minted ${tok.slice(0, 5)}… (expires: ${expiryLabel}, label: "${label}")`);
+    console.log(`✓ rotated into ${args.config} — restart the plugin to load it (backup: ${bak})`);
+  } else {
+    console.log(`✓ minted token (expires: ${expiryLabel}, label: "${label}"):`);
+    console.log(`  ${tok}`);
+    console.log('  keep this secret — set it as the plugin token (or re-run with --config to rotate it in place)');
+  }
+  return 0;
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const cmd = args._[0] || 'check';
@@ -148,6 +209,7 @@ async function main() {
     if (cmd === 'check') code = await check(cfg);
     else if (cmd === 'poll') { await poll(cfg); code = 0; }
     else if (cmd === 'test') code = await test(cfg);
+    else if (cmd === 'mint') code = await mint(cfg, args);
     else { console.error(`unknown command: ${cmd}`); code = 2; }
     process.exit(code);
   } catch (e) {
