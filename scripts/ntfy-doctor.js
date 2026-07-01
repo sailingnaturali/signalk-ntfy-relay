@@ -23,6 +23,9 @@
  *                     rotates the token into that config file (backup written);
  *                     otherwise it prints the new token. Tune with --label and
  *                     --expires (never | <days>, default never).
+ *   revoke            Revoke access tokens. --others revokes every token except
+ *                     the authenticating (active) one; --target <full-token>
+ *                     revokes one specific token. Never revokes the active token.
  *
  * Config (precedence: CLI flag > --config file > env > default):
  *   --server <url>    ntfy base URL           (env NTFY_SERVER, default https://ntfy.sh)
@@ -195,6 +198,40 @@ async function mint({ server, token }, args) {
   return 0;
 }
 
+async function revoke({ server, token }, args) {
+  if (!token) {
+    console.error('error: revoke needs an authenticating token (--token, NTFY_TOKEN, or --config)');
+    return 2;
+  }
+  let targets;
+  if (args.target) {
+    if (args.target === token) { console.error('refusing to revoke the authenticating token'); return 2; }
+    targets = [args.target];
+  } else if (args.others) {
+    const acc = await request(`${server}/v1/account`, { headers: authHeaders(token) });
+    if (acc.status !== 200) { console.log(`account list: ${acc.status}`); return 1; }
+    let all = [];
+    try { all = (JSON.parse(acc.body).tokens || []).map((t) => t.token).filter(Boolean); } catch (e) {}
+    targets = all.filter((t) => t !== token); // keep the active/authenticating token
+  } else {
+    console.error('error: revoke needs --others (all but the active token) or --target <full-token>');
+    return 2;
+  }
+  if (!targets.length) { console.log('nothing to revoke'); return 0; }
+  let failures = 0;
+  for (const t of targets) {
+    const res = await request(`${server}/v1/account/token/${encodeURIComponent(t)}`, {
+      method: 'DELETE',
+      headers: authHeaders(token),
+    });
+    const ok = res.status >= 200 && res.status < 300;
+    if (!ok) failures += 1;
+    console.log(`revoke ${t.slice(0, 6)}…: ${res.status} ${ok ? '✓' : '✗'}`);
+  }
+  console.log(`kept active ${token.slice(0, 6)}…`);
+  return failures ? 1 : 0;
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const cmd = args._[0] || 'check';
@@ -210,6 +247,7 @@ async function main() {
     else if (cmd === 'poll') { await poll(cfg); code = 0; }
     else if (cmd === 'test') code = await test(cfg);
     else if (cmd === 'mint') code = await mint(cfg, args);
+    else if (cmd === 'revoke') code = await revoke(cfg, args);
     else { console.error(`unknown command: ${cmd}`); code = 2; }
     process.exit(code);
   } catch (e) {
