@@ -35,6 +35,26 @@ subscription manager; ntfy is reached with Node's built-in `https`.
 | `minState` | `warn` | Minimum severity to forward |
 | `notifyOnClear` | `true` | Also send a message when an alarm resolves |
 | `includePosition` | `true` | Append `lat, lon` to the message |
+| `healthCheckIntervalHours` | `24` | Proactively probe the ntfy path (`/v1/account`); `0` disables. Token-only |
+| `failureThreshold` | `3` | Consecutive failures before raising the delivery-path alarm |
+
+## Delivery-path health check
+
+The push path can break silently — an expired/revoked token, an ACL change, or a
+server outage means alarms stop reaching the phone with nothing to show for it,
+and you don't find out until the next real alarm fails to deliver. To close that
+blind spot the relay watches its own health:
+
+- **Proactively** — every `healthCheckIntervalHours` it verifies the token/server
+  via a read-only `/v1/account` probe (catches an expired token even when no
+  alarms are firing).
+- **Reactively** — it counts consecutive send failures.
+
+After `failureThreshold` consecutive failures it raises
+`notifications.ntfyRelay.deliveryFailed` (state `alert`) under *self*. That's a
+SignalK notification, so it surfaces on the dashboard and voice pipeline —
+channels **independent of the phone that's down** — and it is never itself
+forwarded to ntfy (no loop through the failing path). A success clears it.
 
 ## Setup
 

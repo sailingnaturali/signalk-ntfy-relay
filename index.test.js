@@ -259,3 +259,63 @@ test('schema exposes the documented config fields with defaults', () => {
   assert.equal(p.includePosition.default, true);
   assert.ok(p.topic, 'topic field present');
 });
+
+// --- delivery-path health check ---
+
+// App with a handleMessage capture, for the health-check notifications.
+function makeHealthApp() {
+  const { app, captured } = makeApp({ latitude: 48, longitude: -123 });
+  const handled = [];
+  app.handleMessage = (id, delta) => handled.push(delta);
+  return { app, captured, handled };
+}
+
+test('health check raises deliveryFailed only after failureThreshold consecutive failures', () => {
+  const { app, handled } = makeHealthApp();
+  let ok = false;
+  const plugin = createPlugin(app, { send: () => {}, checkAccount: (cfg, a, cb) => cb(ok) });
+  plugin.start({ topic: 't', token: 'tk', failureThreshold: 3, healthCheckIntervalHours: 0 });
+  plugin._runHealthCheck(); // fail 1
+  plugin._runHealthCheck(); // fail 2
+  assert.equal(handled.length, 0, 'no alarm before threshold');
+  plugin._runHealthCheck(); // fail 3 -> raise
+  assert.equal(handled.length, 1);
+  const v = handled[0].updates[0].values[0];
+  assert.equal(v.path, 'notifications.ntfyRelay.deliveryFailed');
+  assert.equal(v.value.state, 'alert');
+});
+
+test('a success clears deliveryFailed and resets the failure counter', () => {
+  const { app, handled } = makeHealthApp();
+  let ok = false;
+  const plugin = createPlugin(app, { send: () => {}, checkAccount: (cfg, a, cb) => cb(ok) });
+  plugin.start({ topic: 't', token: 'tk', failureThreshold: 2, healthCheckIntervalHours: 0 });
+  plugin._runHealthCheck();
+  plugin._runHealthCheck(); // -> raise (handled[0])
+  ok = true;
+  plugin._runHealthCheck(); // success -> clear (handled[1])
+  assert.equal(handled.length, 2);
+  assert.equal(handled[1].updates[0].values[0].value.state, 'normal');
+  // counter reset: one more failure alone (below threshold) does not re-raise
+  ok = false;
+  plugin._runHealthCheck();
+  assert.equal(handled.length, 2);
+});
+
+test('the deliveryFailed notification is never forwarded to ntfy (loop-avoidance)', () => {
+  const { sent, feed } = runRelay({ topic: 't' });
+  // Use an above-threshold state so it WOULD forward if not excluded.
+  feed('notifications.ntfyRelay.deliveryFailed', { state: 'alarm', message: 'x' });
+  assert.equal(sent.length, 0);
+});
+
+test('reactive send failures count toward the deliveryFailed threshold', () => {
+  const { app, captured, handled } = makeHealthApp();
+  const plugin = createPlugin(app, { send: (req, a, onResult) => onResult && onResult(false) });
+  plugin.start({ topic: 't', failureThreshold: 2, healthCheckIntervalHours: 0 });
+  const feed = (path, value) => captured.onDelta({ updates: [{ values: [{ path, value }] }] });
+  feed('notifications.a', { state: 'alarm', message: 'A' }); // send fail 1
+  feed('notifications.b', { state: 'alarm', message: 'B' }); // send fail 2 -> raise
+  assert.equal(handled.length, 1);
+  assert.equal(handled[0].updates[0].values[0].path, 'notifications.ntfyRelay.deliveryFailed');
+});

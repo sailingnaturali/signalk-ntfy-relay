@@ -79,32 +79,65 @@ const https = require('https');
 const http = require('http');
 const { URL } = require('url');
 
-// The only I/O boundary. Fire-and-forget POST to ntfy; never throws — any
+// A network I/O boundary. Fire-and-forget POST to ntfy; never throws — any
 // failure is logged via app.error so one bad push can't stall other alarms.
-function defaultSend({ url, headers, body }, app) {
+// `onResult(ok)` reports the outcome to the delivery-path health tracker.
+function defaultSend({ url, headers, body }, app, onResult) {
+  const report = (ok) => { if (onResult) onResult(ok); };
   try {
     const u = new URL(url);
     const lib = u.protocol === 'http:' ? http : https;
     const req = lib.request(u, { method: 'POST', headers }, (res) => {
       res.resume(); // drain
-      if (res.statusCode >= 300) app.error(`ntfy responded ${res.statusCode}`);
+      const ok = res.statusCode < 300;
+      if (!ok) app.error(`ntfy responded ${res.statusCode}`);
+      report(ok);
     });
-    req.on('error', (e) => app.error(`ntfy post failed: ${e.message}`));
+    req.on('error', (e) => { app.error(`ntfy post failed: ${e.message}`); report(false); });
     req.setTimeout(5000, () => req.destroy(new Error('ntfy timeout')));
     req.write(body);
     req.end();
   } catch (e) {
     app.error(`ntfy send error: ${e.message}`);
+    report(false);
+  }
+}
+
+// Read-only auth/reachability probe: GET {server}/v1/account. `cb(ok, status)`.
+// Lets the plugin catch an expired/revoked token (or an unreachable server)
+// proactively, before a real alarm needs the path. Never throws.
+function defaultCheckAccount({ server, token }, app, cb) {
+  try {
+    const base = (server || 'https://ntfy.sh').replace(/\/+$/, '');
+    const u = new URL(`${base}/v1/account`);
+    const lib = u.protocol === 'http:' ? http : https;
+    const headers = token ? { Authorization: `Bearer ${token}` } : {};
+    const req = lib.request(u, { method: 'GET', headers }, (res) => {
+      res.resume();
+      cb(res.statusCode >= 200 && res.statusCode < 300, res.statusCode);
+    });
+    req.on('error', (e) => { app.error(`ntfy account check failed: ${e.message}`); cb(false); });
+    req.setTimeout(5000, () => req.destroy(new Error('ntfy account check timeout')));
+    req.end();
+  } catch (e) {
+    app.error(`ntfy account check error: ${e.message}`);
+    cb(false);
   }
 }
 
 module.exports = function (app, deps) {
   const send = (deps && deps.send) || defaultSend;
+  const checkAccount = (deps && deps.checkAccount) || defaultCheckAccount;
   const plugin = {
     id: 'signalk-ntfy-relay',
     name: 'ntfy notification relay',
     description: 'Relay SignalK notifications (alarms) to an ntfy topic.',
   };
+
+  // The plugin's own health notification — surfaces on the dashboard/voice
+  // (channels independent of the phone push that may be down). Never forwarded
+  // to ntfy (see onDelta), so it can't loop through the failing path.
+  const DELIVERY_FAILED_PATH = 'notifications.ntfyRelay.deliveryFailed';
 
   plugin.schema = {
     type: 'object',
@@ -140,11 +173,69 @@ module.exports = function (app, deps) {
         title: 'Append vessel position to the message',
         default: true,
       },
+      healthCheckIntervalHours: {
+        type: 'number',
+        title: 'Delivery-path health check interval (hours)',
+        description:
+          'Periodically verify the ntfy token/server via /v1/account so a broken push path (expired token, ACL, outage) is caught before the next real alarm. 0 disables. Only runs when an access token is set.',
+        default: 24,
+      },
+      failureThreshold: {
+        type: 'number',
+        title: 'Consecutive failures before raising a delivery-path alarm',
+        description:
+          'How many consecutive send/health-check failures before raising notifications.ntfyRelay.deliveryFailed (rides out transient network blips).',
+        default: 3,
+      },
     },
   };
 
   let unsubscribes = [];
   let lastState = new Map();
+  let currentOptions = {};
+  let failureThreshold = 3;
+  let consecutiveFailures = 0;
+  let deliveryFailedRaised = false;
+  let healthTimer = null;
+
+  function setDeliveryFailed(active, detail) {
+    app.handleMessage(plugin.id, {
+      updates: [{ values: [{ path: DELIVERY_FAILED_PATH, value: active
+        ? {
+            state: 'alert',
+            method: ['visual'],
+            message: `ntfy delivery path failing${detail ? ` (${detail})` : ''} — alarms are not reaching the phone`,
+            timestamp: new Date().toISOString(),
+          }
+        : { state: 'normal', method: [], message: '' } }] }],
+    });
+  }
+
+  // Shared by the reactive (per-send) and proactive (heartbeat) paths: a run of
+  // `failureThreshold` consecutive failures raises the delivery-path alarm; any
+  // success resets and clears it.
+  function recordResult(ok, detail) {
+    if (ok) {
+      consecutiveFailures = 0;
+      if (deliveryFailedRaised) { deliveryFailedRaised = false; setDeliveryFailed(false); }
+      return;
+    }
+    consecutiveFailures += 1;
+    if (consecutiveFailures >= failureThreshold && !deliveryFailedRaised) {
+      deliveryFailedRaised = true;
+      setDeliveryFailed(true, detail);
+    }
+  }
+
+  // Proactive probe. No token → nothing to auth-check (unreserved topics publish
+  // anonymously); the reactive send path still covers connection failures.
+  function runHealthCheck() {
+    if (!currentOptions.token) return;
+    checkAccount({ server: currentOptions.server, token: currentOptions.token }, app, (ok, status) => {
+      recordResult(ok, ok ? undefined : `account check ${status || 'error'}`);
+    });
+  }
+  plugin._runHealthCheck = runHealthCheck;
 
   function position() {
     const node = app.getSelfPath('navigation.position');
@@ -159,13 +250,17 @@ module.exports = function (app, deps) {
         if (!v.path || !v.path.startsWith('notifications.')) return;
         const state = v.value && v.value.state;
         const path = v.path.slice('notifications.'.length);
+        // Never forward our own delivery-path alarm — it must not loop through
+        // the failing ntfy path (it surfaces via the dashboard/voice instead).
+        if (path.startsWith('ntfyRelay.')) return;
         const prev = lastState.get(path);
         if (state === prev) return; // edge-trigger: only act on change
         lastState.set(path, state);
         const min = options.minState || 'warn';
         const message = (v.value && v.value.message) || undefined;
+        const onResult = (ok) => recordResult(ok, ok ? undefined : 'send failed');
         if (shouldForward(state, min)) {
-          send(buildRequest({ path, state, message }, position(), options), app);
+          send(buildRequest({ path, state, message }, position(), options), app, onResult);
         } else if (
           !isActive(state) &&
           isActive(prev) &&
@@ -173,7 +268,8 @@ module.exports = function (app, deps) {
         ) {
           send(
             buildRequest({ path, state: state || 'normal', message }, position(), options),
-            app
+            app,
+            onResult
           );
         }
       })
@@ -183,9 +279,19 @@ module.exports = function (app, deps) {
   plugin.start = function (options) {
     options = options || {};
     lastState = new Map();
+    currentOptions = options;
+    failureThreshold = options.failureThreshold > 0 ? options.failureThreshold : 3;
+    consecutiveFailures = 0;
+    deliveryFailedRaised = false;
     if (!options.topic) {
       app.error('signalk-ntfy-relay: no ntfy topic configured — idling');
       return;
+    }
+    const intervalHours = options.healthCheckIntervalHours ?? 24;
+    if (intervalHours > 0 && options.token) {
+      runHealthCheck(); // one probe at startup
+      healthTimer = setInterval(runHealthCheck, intervalHours * 60 * 60 * 1000);
+      if (healthTimer.unref) healthTimer.unref(); // don't hold the process open
     }
     app.subscriptionmanager.subscribe(
       {
@@ -208,6 +314,7 @@ module.exports = function (app, deps) {
     unsubscribes.forEach((f) => f());
     unsubscribes = [];
     lastState = new Map();
+    if (healthTimer) { clearInterval(healthTimer); healthTimer = null; }
   };
 
   return plugin;
