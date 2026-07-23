@@ -126,7 +126,7 @@ async function test({ server, topic, token }) {
   const marker = `ntfy-doctor ${new Date().toISOString()}`;
   const { status } = await request(`${server}/${encodeURIComponent(topic)}`, {
     method: 'POST',
-    headers: { ...authHeaders(token), Title: 'ntfy-doctor test — please ignore' },
+    headers: { ...authHeaders(token), Title: 'ntfy-doctor test - please ignore' },
     body: marker,
   });
   console.log(`publish: ${status}`);
@@ -136,8 +136,13 @@ async function test({ server, topic, token }) {
       : '✗ publish failed');
     return 1;
   }
-  const { msgs } = await poll({ server, topic, token }, '1m', true);
-  const landed = msgs.some((m) => (m.message || '').includes(marker));
+  // ntfy.sh's poll store lags publish by a beat, so retry the read-back.
+  let landed = false;
+  for (let i = 0; i < 5 && !landed; i++) {
+    if (i) await new Promise((r) => setTimeout(r, 1000));
+    const { msgs } = await poll({ server, topic, token }, '1m', true);
+    landed = msgs.some((m) => (m.message || '').includes(marker));
+  }
   console.log(landed ? '✓ test message published and confirmed on the topic' : '⚠ published (200) but not seen on poll yet');
   return landed ? 0 : 1;
 }
